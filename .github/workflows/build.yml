@@ -1,0 +1,110 @@
+name: Build DLL
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - debug
+          - release
+          - alpha
+
+jobs:
+  build:
+    name: Build ${{ matrix.configuration }}
+    runs-on: windows-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: ${{ github.event.inputs.configuration && fromJSON(format('["{0}"]', github.event.inputs.configuration)) || fromJSON('["debug", "release", "alpha"]') }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+      
+    - name: Setup Clang
+      uses: egor-tensin/setup-clang@v1
+      with:
+        version: 17
+        platform: x64
+        
+    - name: Verify Clang Installation
+      shell: pwsh
+      run: |
+        Write-Host "Checking Clang installation..."
+        clang --version
+        if ($LASTEXITCODE -ne 0) {
+          Write-Warning "Clang not found in PATH, but this may be OK if Visual Studio Clang is used"
+        }
+        
+    - name: Build Solution
+      shell: pwsh
+      run: |
+        $solution = "${{ github.workspace }}\supremacy_csgo.sln"
+        $config = "${{ matrix.configuration }}"
+        $platform = "Win32"
+        
+        Write-Host "Building configuration: $config"
+        Write-Host "Platform: $platform"
+        Write-Host "Solution: $solution"
+        Write-Host "MSBuild should be available in PATH"
+        
+        msbuild $solution `
+          /p:Configuration=$config `
+          /p:Platform=$platform `
+          /m `
+          /nologo `
+          /verbosity:minimal
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Build failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+        
+    - name: Verify Output
+      shell: pwsh
+      run: |
+        $config = "${{ matrix.configuration }}"
+        $outputPath = "${{ github.workspace }}\output\$config"
+        $dllPath = Join-Path $outputPath "system32.dll"
+        
+        Write-Host "Checking for DLL at: $dllPath"
+        
+        if (Test-Path $dllPath) {
+          $fileInfo = Get-Item $dllPath
+          Write-Host "✓ DLL found: $($fileInfo.FullName)"
+          Write-Host "  Size: $($fileInfo.Length) bytes"
+          Write-Host "  Last modified: $($fileInfo.LastWriteTime)"
+        } else {
+          Write-Error "DLL not found at expected location: $dllPath"
+          Write-Host "Contents of output directory:"
+          if (Test-Path $outputPath) {
+            Get-ChildItem -Path $outputPath -Recurse | ForEach-Object {
+              Write-Host "  $($_.FullName)"
+            }
+          } else {
+            Write-Host "  Output directory does not exist"
+          }
+          exit 1
+        }
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: system32-${{ matrix.configuration }}
+        path: output/${{ matrix.configuration }}/system32.dll
+        retention-days: 30
+        if-no-files-found: error
+
