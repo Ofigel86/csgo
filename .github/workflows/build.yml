@@ -54,7 +54,7 @@ jobs:
       run: |
         $solution = "${{ github.workspace }}\supremacy_csgo.sln"
         $config = "${{ matrix.configuration }}"
-        $platform = "Win32"
+        $platform = "x86"
         
         Write-Host "Building configuration: $config"
         Write-Host "Platform: $platform"
