@@ -34,11 +34,10 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Check and Install LLVM
+    - name: Install LLVM Component for Visual Studio
       shell: pwsh
-      id: llvm_check
       run: |
-        Write-Host "Checking for available LLVM versions in Visual Studio..."
+        Write-Host "Installing LLVM/Clang component for Visual Studio..."
         $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
         if (-not $vsPath) {
           Write-Error "Visual Studio installation not found"
@@ -46,93 +45,50 @@ jobs:
         }
         Write-Host "Found Visual Studio at: $vsPath"
         
+        # Check if LLVM is already installed
         $llvmBasePath = Join-Path $vsPath "VC\Tools\Llvm\x64\lib\clang"
-        $availableVersion = $null
+        $needsInstall = -not (Test-Path $llvmBasePath)
         
+        if ($needsInstall) {
+          Write-Host "LLVM not found, installing component..."
+          $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          if (-not (Test-Path $vsInstaller)) {
+            Write-Error "Visual Studio Installer not found"
+            exit 1
+          }
+          
+          # Install LLVM/Clang component
+          $componentId = "Microsoft.VisualStudio.Component.VC.Llvm.Clang"
+          Write-Host "Installing component: $componentId"
+          
+          $arguments = @(
+            "modify",
+            "--installPath", "`"$vsPath`"",
+            "--add", $componentId,
+            "--quiet",
+            "--norestart",
+            "--wait"
+          )
+          
+          $process = Start-Process -FilePath $vsInstaller -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+          
+          if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
+            Write-Host "LLVM component installation completed (exit code: $($process.ExitCode))"
+            Start-Sleep -Seconds 10
+          } else {
+            Write-Warning "LLVM component installation returned exit code: $($process.ExitCode)"
+          }
+        } else {
+          Write-Host "LLVM already installed"
+        }
+        
+        # Verify installation
         if (Test-Path $llvmBasePath) {
           $versions = Get-ChildItem -Path $llvmBasePath -Directory | Select-Object -ExpandProperty Name | Sort-Object -Descending
-          Write-Host "Available LLVM versions: $($versions -join ', ')"
-          
-          # Try to find version 16, 15, or 14
-          foreach ($version in @("16", "15", "14")) {
-            if ($versions -contains $version) {
-              $availableVersion = $version
-              Write-Host "Found LLVM version: $version"
-              break
-            }
-          }
+          Write-Host "✓ Available LLVM versions: $($versions -join ', ')"
+        } else {
+          Write-Warning "LLVM path still not found after installation attempt"
         }
-        
-        # If no LLVM found, try to install it
-        if (-not $availableVersion) {
-          Write-Host "No suitable LLVM version found, attempting to install LLVM component..."
-          $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
-          if (Test-Path $vsInstaller) {
-            # Try installing LLVM/Clang component
-            $componentId = "Microsoft.VisualStudio.Component.VC.Llvm.Clang"
-            Write-Host "Installing component: $componentId"
-            
-            $process = Start-Process -FilePath $vsInstaller -ArgumentList "modify", "--installPath", "`"$vsPath`"", "--add", $componentId, "--quiet", "--norestart", "--wait" -Wait -PassThru -NoNewWindow
-            if ($process.ExitCode -eq 0) {
-              Write-Host "LLVM component installation completed"
-              # Check again after installation
-              Start-Sleep -Seconds 5
-              if (Test-Path $llvmBasePath) {
-                $versions = Get-ChildItem -Path $llvmBasePath -Directory | Select-Object -ExpandProperty Name | Sort-Object -Descending
-                foreach ($version in @("16", "15", "14")) {
-                  if ($versions -contains $version) {
-                    $availableVersion = $version
-                    Write-Host "Found LLVM version after installation: $version"
-                    break
-                  }
-                }
-              }
-            } else {
-              Write-Warning "Failed to install LLVM component, exit code: $($process.ExitCode)"
-            }
-          }
-        }
-        
-        # Use the first available version if still not found
-        if (-not $availableVersion -and (Test-Path $llvmBasePath)) {
-          $versions = Get-ChildItem -Path $llvmBasePath -Directory | Select-Object -ExpandProperty Name | Sort-Object -Descending
-          if ($versions.Count -gt 0) {
-            $availableVersion = $versions[0]
-            Write-Host "Using first available LLVM version: $availableVersion"
-          }
-        }
-        
-        if (-not $availableVersion) {
-          if (Test-Path $llvmBasePath) {
-            $allVersions = Get-ChildItem -Path $llvmBasePath -Directory | Select-Object -ExpandProperty Name
-            Write-Error "No suitable LLVM version found. Available versions: $($allVersions -join ', ')"
-          } else {
-            Write-Error "No LLVM installation found in Visual Studio"
-          }
-          exit 1
-        }
-        
-        Write-Host "Using LLVM version: $availableVersion"
-        echo "llvm_version=$availableVersion" >> $env:GITHUB_OUTPUT
-        
-    - name: Update Project LLVM Version
-      shell: pwsh
-      run: |
-        $llvmVersion = "${{ steps.llvm_check.outputs.llvm_version }}"
-        Write-Host "Updating project to use LLVM version: $llvmVersion"
-        
-        $projectFile = "${{ github.workspace }}\supremacy_csgo.vcxproj"
-        $content = Get-Content $projectFile -Raw
-        $content = $content -replace '<LLVMToolsVersion>\d+</LLVMToolsVersion>', "<LLVMToolsVersion>$llvmVersion</LLVMToolsVersion>"
-        Set-Content -Path $projectFile -Value $content -NoNewline
-        
-        Write-Host "Project file updated successfully"
-        
-    - name: Setup Clang
-      uses: egor-tensin/setup-clang@v1
-      with:
-        version: ${{ steps.llvm_check.outputs.llvm_version }}
-        platform: x64
         
     - name: Build Solution
       shell: pwsh
