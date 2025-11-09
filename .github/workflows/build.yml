@@ -37,7 +37,7 @@ jobs:
     - name: Setup Clang
       uses: egor-tensin/setup-clang@v1
       with:
-        version: 17
+        version: 16
         platform: x64
         
     - name: Verify Clang Installation
@@ -47,6 +47,23 @@ jobs:
         clang --version
         if ($LASTEXITCODE -ne 0) {
           Write-Warning "Clang not found in PATH, but this may be OK if Visual Studio Clang is used"
+        }
+        
+        # Check for LLVM 16 in Visual Studio paths
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        if ($vsPath) {
+          $llvmPath = Join-Path $vsPath "VC\Tools\Llvm\x64\lib\clang\16"
+          Write-Host "Checking for LLVM 16 at: $llvmPath"
+          if (Test-Path $llvmPath) {
+            Write-Host "✓ LLVM 16 found in Visual Studio"
+          } else {
+            Write-Warning "LLVM 16 not found in Visual Studio, checking available versions..."
+            $llvmBasePath = Join-Path $vsPath "VC\Tools\Llvm\x64\lib\clang"
+            if (Test-Path $llvmBasePath) {
+              $versions = Get-ChildItem -Path $llvmBasePath -Directory | Select-Object -ExpandProperty Name
+              Write-Host "Available LLVM versions: $($versions -join ', ')"
+            }
+          }
         }
         
     - name: Build Solution
